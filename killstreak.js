@@ -7,7 +7,6 @@ const util = require('./util');
 
 // Kill streak configurations
 const KILL_STREAK_TIMEOUT = 18000; // 18 seconds in milliseconds
-const FIRST_BLOOD_TIME_LIMIT = 5 * 60 * 1000; // 5 minutes in milliseconds
 
 // Multikill streak messages (double kill, triple kill, etc.)
 const KILL_STREAK_TYPES = {
@@ -104,7 +103,7 @@ class KillStreak {
             const killsGained = currentKills - previousKills;
 
             // Check for First Blood
-            if (!this.killStreakData.firstBloodClaimed && currentKills > 0 && currentGameTime <= FIRST_BLOOD_TIME_LIMIT) {
+            if (!this.killStreakData.firstBloodClaimed && currentKills > 0) {
                 util.logMessage(`FIRST BLOOD ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
                 this.killStreakData.firstBloodClaimed = true;
                 // You could play a special sound here
