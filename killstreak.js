@@ -1,14 +1,10 @@
 // killstreak.js
-const {
-    COMBAT_EMOJIS,
-    SYSTEM_EMOJIS
-} = require('./emojis');
+const { COMBAT_EMOJIS, SYSTEM_EMOJIS } = require('./emojis');
 const util = require('./util');
 
-// Kill streak configurations
+// Constants
 const KILL_STREAK_TIMEOUT = 18000; // 18 seconds in milliseconds
 
-// Multikill streak messages (double kill, triple kill, etc.)
 const KILL_STREAK_TYPES = {
     2: `DOUBLE KILL ${COMBAT_EMOJIS.KILL}${COMBAT_EMOJIS.KILL}`,
     3: `TRIPLE KILL ${COMBAT_EMOJIS.KILL}${COMBAT_EMOJIS.KILL}${COMBAT_EMOJIS.KILL}`,
@@ -16,7 +12,6 @@ const KILL_STREAK_TYPES = {
     5: `RAMPAGE ${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}`
 };
 
-// Killing spree messages (based on kills without dying)
 const KILLING_SPREE_TYPES = {
     3: `KILLING SPREE ${COMBAT_EMOJIS.SPREE}`,
     4: `DOMINATING ${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}`,
@@ -28,12 +23,20 @@ const KILLING_SPREE_TYPES = {
     10: `BEYOND GODLIKE ${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}${COMBAT_EMOJIS.SPREE}`
 };
 
+// Game state constants
+const GAME_STATES = {
+    INIT: 'DOTA_GAMERULES_STATE_INIT',
+    LOADING: 'DOTA_GAMERULES_STATE_WAIT_FOR_PLAYERS_TO_LOAD',
+    HERO_SELECTION: 'DOTA_GAMERULES_STATE_HERO_SELECTION',
+    IN_PROGRESS: 'DOTA_GAMERULES_STATE_GAME_IN_PROGRESS'
+};
+
 class KillStreak {
     constructor(logger, obsService) {
         this.logger = logger;
         this.obsService = obsService;
 
-        // Dummy initial gamestate
+        // Initialize game state tracking
         this.previousGameState = {
             player: {
                 kills: 0,
@@ -54,143 +57,262 @@ class KillStreak {
         this.resetShown = false;
     }
 
+    /**
+     * Main method to process the current game state
+     * @param {Object} currentGameState - The current game state
+     */
     async processGameState(currentGameState) {
-        // Handle game resets or new games
-        if (!this.resetShown && currentGameState && currentGameState.map &&
-            (currentGameState.map.game_state === 'DOTA_GAMERULES_STATE_INIT' ||
-                currentGameState.map.game_state === 'DOTA_GAMERULES_STATE_WAIT_FOR_PLAYERS_TO_LOAD' ||
-                currentGameState.map.game_state === 'DOTA_GAMERULES_STATE_HERO_SELECTION')) {
-            // Reset all tracking when game restarts
-            this.killStreakData.kills = 0;
-            this.killStreakData.lastKillTime = 0;
-            this.killStreakData.streakType = null;
-            this.killStreakData.killsWithoutDying = 0;
-            this.killStreakData.spreeLevel = 0;
-            this.killStreakData.firstBloodClaimed = false;
-            util.logMessage('Game reset - tracking reinitialized', SYSTEM_EMOJIS.INFO);
-            this.resetShown = true;
+        // Early returns for invalid game states
+        if (this.shouldResetTracking(currentGameState)) {
+            this.resetTracking();
+            return;
         }
 
-        if (!currentGameState || !currentGameState.player || !currentGameState.map || currentGameState.map.game_state !== 'DOTA_GAMERULES_STATE_GAME_IN_PROGRESS') return;
-
-        const currentKills = currentGameState.player.kills || 0;
-        const previousKills = this.previousGameState.player.kills || 0;
-        const currentDeaths = currentGameState.player.deaths || 0;
-        const previousDeaths = this.previousGameState.player.deaths || 0;
-        const currentGameTime = currentGameState.map.game_time * 1000;
-        const currentAssists = currentGameState.player.assists || 0;
-        const previousAssists = this.previousGameState.player.assists || 0;
-        const playerTeam = currentGameState.player?.team_name || '';
-        const currentRadiantScore = currentGameState.map?.radiant_score || 0;
-        const currentDireScore = currentGameState.map?.dire_score || 0;
-        const previousRadiantScore = this.previousGameState.map?.radiant_score || 0;
-        const previousDireScore = this.previousGameState.map?.dire_score || 0;
-        const playerGotKill = currentKills > previousKills;
-
-        //FIRSTBLOOD
-        // Case 1: First team kill detected (any team score went from 0 to more than 0)
-        const firstTeamKill = (previousRadiantScore === 0 && currentRadiantScore > 0) ||
-            (previousDireScore === 0 && currentDireScore > 0);
-
-        // Case 2: First global kill (sum of team scores went from 0 to 1)
-        const firstGlobalKill = previousRadiantScore + previousDireScore === 0 &&
-            currentRadiantScore + currentDireScore === 1;
-
-        if ((firstTeamKill || firstGlobalKill) && !this.killStreakData.firstBloodClaimed) {
-            this.killStreakData.firstBloodClaimed = true;
-
-            // Player got first blood
-            if (playerGotKill) {
-                util.logMessage(`YOU GOT FIRST BLOOD! ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
-            }
-
-            // Player's team got first blood
-            const playerOnRadiant = playerTeam.toLowerCase() === 'radiant';
-            const radiantGotKill = currentRadiantScore > previousRadiantScore;
-
-            if ((playerOnRadiant && radiantGotKill) || (!playerOnRadiant && !radiantGotKill)) {
-                util.logMessage(`YOUR TEAM GOT FIRST BLOOD! ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
-            } else {
-                util.logMessage(`ENEMY TEAM GOT FIRST BLOOD ${COMBAT_EMOJIS.DEATH}`, COMBAT_EMOJIS.DEATH);
-            }
-        }
-        //ENDFIRSTBLOOD
-
-        // Check for player assists
-        if (currentAssists > previousAssists) {
-            const assistsGained = currentAssists - previousAssists;
-            util.logMessage(`Player got ${assistsGained} new assist(s)! Total assists: ${currentAssists} ${COMBAT_EMOJIS.ASSIST}`, COMBAT_EMOJIS.ASSIST);
+        if (!this.isValidGameState(currentGameState)) {
+            return;
         }
 
-        // Check for player death
-        if (currentDeaths > previousDeaths) {
-            util.logMessage(`Player died ${COMBAT_EMOJIS.DEATH}`, COMBAT_EMOJIS.DEATH);
-            // Reset killing spree on death
-            if (this.killStreakData.killsWithoutDying >= 3) {
-                util.logMessage(`KILLING SPREE ENDED ${COMBAT_EMOJIS.DEATH} (${this.killStreakData.killsWithoutDying} kills)`, COMBAT_EMOJIS.DEATH);
-            }
-            this.killStreakData.killsWithoutDying = 0;
-            this.killStreakData.spreeLevel = 0;
+        // Extract game state data
+        const gameData = this.extractGameStateData(currentGameState);
+
+        // Process various events
+        this.processFirstBlood(gameData);
+        this.processAssists(gameData);
+        this.processDeaths(gameData);
+        await this.processKills(gameData, currentGameState);
+        this.handleKillStreakExpiration(gameData);
+
+        // Update previous state
+        this.previousGameState = currentGameState;
+    }
+
+    /**
+     * Check if tracking should be reset (new game)
+     */
+    shouldResetTracking(currentGameState) {
+        return !this.resetShown &&
+            currentGameState &&
+            currentGameState.map &&
+            [
+                GAME_STATES.INIT,
+                GAME_STATES.LOADING,
+                GAME_STATES.HERO_SELECTION
+            ].includes(currentGameState.map.game_state);
+
+    }
+
+    /**
+     * Reset all tracking data for a new game
+     */
+    resetTracking() {
+        this.killStreakData = {
+            kills: 0,
+            lastKillTime: 0,
+            streakType: null,
+            killsWithoutDying: 0,
+            spreeLevel: 0,
+            firstBloodClaimed: false
+        };
+        util.logMessage('Game reset - tracking reinitialized', SYSTEM_EMOJIS.INFO);
+        this.resetShown = true;
+    }
+
+    /**
+     * Check if the current game state is valid for processing
+     */
+    isValidGameState(currentGameState) {
+        return currentGameState &&
+            currentGameState.player &&
+            currentGameState.map &&
+            currentGameState.map.game_state === GAME_STATES.IN_PROGRESS;
+    }
+
+    /**
+     * Extract relevant data from the game state
+     */
+    extractGameStateData(currentGameState) {
+        const previousState = this.previousGameState;
+
+        return {
+            currentKills: currentGameState.player?.kills || 0,
+            previousKills: previousState.player?.kills || 0,
+            currentDeaths: currentGameState.player?.deaths || 0,
+            previousDeaths: previousState.player?.deaths || 0,
+            currentAssists: currentGameState.player?.assists || 0,
+            previousAssists: previousState.player?.assists || 0,
+            currentGameTime: (currentGameState.map?.game_time || 0) * 1000,
+            playerTeam: currentGameState.player?.team_name || '',
+            currentRadiantScore: currentGameState.map?.radiant_score || 0,
+            currentDireScore: currentGameState.map?.dire_score || 0,
+            previousRadiantScore: previousState.map?.radiant_score || 0,
+            previousDireScore: previousState.map?.dire_score || 0,
+            playerGotKill: (currentGameState.player?.kills || 0) > (previousState.player?.kills || 0),
+            killsGained: (currentGameState.player?.kills || 0) - (previousState.player?.kills || 0),
+            matchId: currentGameState.map?.matchid
+        };
+    }
+
+    /**
+     * Process first blood events
+     */
+    processFirstBlood(gameData) {
+        if (this.killStreakData.firstBloodClaimed) {
+            return;
         }
 
-        // Detect if a kill happened since the last update
-        if (playerGotKill) {
-            const killsGained = currentKills - previousKills;
+        // Check for first team kill
+        const firstTeamKill = (gameData.previousRadiantScore === 0 && gameData.currentRadiantScore > 0) ||
+            (gameData.previousDireScore === 0 && gameData.currentDireScore > 0);
 
-            // Increment kills without dying counter
-            this.killStreakData.killsWithoutDying += killsGained;
+        // Check for first global kill
+        const firstGlobalKill = gameData.previousRadiantScore + gameData.previousDireScore === 0 &&
+            gameData.currentRadiantScore + gameData.currentDireScore === 1;
 
-            // Check for killing spree milestones
-            if (KILLING_SPREE_TYPES[this.killStreakData.killsWithoutDying] &&
-                this.killStreakData.spreeLevel < this.killStreakData.killsWithoutDying) {
-                const spreeMessage = KILLING_SPREE_TYPES[this.killStreakData.killsWithoutDying];
-                util.logMessage(spreeMessage, COMBAT_EMOJIS.SPREE);
-                this.killStreakData.spreeLevel = this.killStreakData.killsWithoutDying;
-                // You could play a sound here based on the spree level
-                // playSound(`${spreeMessage.toLowerCase().replace(/ /g, '_')}.mp3`);
-            }
+        if (!(firstTeamKill || firstGlobalKill)) {
+            return;
+        }
 
-            // Basic kill message
-            util.logMessage(`Player got ${killsGained} new kill(s)! Total kills: ${currentKills} ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
+        this.killStreakData.firstBloodClaimed = true;
 
-            // Check for kill streak (double kill, triple kill, etc.)
-            const timeSinceLastKill = currentGameTime - this.killStreakData.lastKillTime;
-            if (timeSinceLastKill <= KILL_STREAK_TIMEOUT) {
-                this.killStreakData.kills += killsGained;
+        // Player got first blood
+        if (gameData.playerGotKill) {
+            util.logMessage(`YOU GOT FIRST BLOOD! ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
+            return;
+        }
 
-                // Determine streak type
-                if (this.killStreakData.kills >= 2 && KILL_STREAK_TYPES[this.killStreakData.kills]) {
-                    this.killStreakData.streakType = KILL_STREAK_TYPES[this.killStreakData.kills];
+        // Player's team got first blood
+        const playerOnRadiant = gameData.playerTeam.toLowerCase() === 'radiant';
+        const radiantGotKill = gameData.currentRadiantScore > gameData.previousRadiantScore;
 
-                    util.logMessage(this.killStreakData.streakType, COMBAT_EMOJIS.SPREE);
+        if ((playerOnRadiant && radiantGotKill) || (!playerOnRadiant && !radiantGotKill)) {
+            util.logMessage(`YOUR TEAM GOT FIRST BLOOD! ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
+        } else {
+            util.logMessage(`ENEMY TEAM GOT FIRST BLOOD ${COMBAT_EMOJIS.DEATH}`, COMBAT_EMOJIS.DEATH);
+        }
+    }
 
-                    // You can trigger additional actions here like playing sounds or notifications
-                    // e.g., playSound(`${killStreakData.streakType.toLowerCase().replace(' ', '_')}.mp3`);
-                    try {
-                        await this.obsService.saveReplay({ matchId: currentGameState.map?.matchid, eventType:'multikill', enemyName:'multiple'});
-                    } catch (error) {
-                        this.logger.error('Failed to save replay', {
-                            error: error.message
-                        });
-                    }
+    /**
+     * Process player assists
+     */
+    processAssists(gameData) {
+        if (gameData.currentAssists > gameData.previousAssists) {
+            const assistsGained = gameData.currentAssists - gameData.previousAssists;
+            util.logMessage(
+                `Player got ${assistsGained} new assist(s)! Total assists: ${gameData.currentAssists} ${COMBAT_EMOJIS.ASSIST}`,
+                COMBAT_EMOJIS.ASSIST
+            );
+        }
+    }
+
+    /**
+     * Process player deaths
+     */
+    processDeaths(gameData) {
+        if (gameData.currentDeaths <= gameData.previousDeaths) {
+            return;
+        }
+
+        util.logMessage(`Player died ${COMBAT_EMOJIS.DEATH}`, COMBAT_EMOJIS.DEATH);
+
+        // Reset killing spree on death
+        if (this.killStreakData.killsWithoutDying >= 3) {
+            util.logMessage(
+                `KILLING SPREE ENDED ${COMBAT_EMOJIS.DEATH} (${this.killStreakData.killsWithoutDying} kills)`,
+                COMBAT_EMOJIS.DEATH
+            );
+        }
+
+        this.killStreakData.killsWithoutDying = 0;
+        this.killStreakData.spreeLevel = 0;
+    }
+
+    /**
+     * Process player kills
+     */
+    async processKills(gameData, currentGameState) {
+        if (!gameData.playerGotKill) {
+            return;
+        }
+
+        // Increment kills without dying counter
+        this.killStreakData.killsWithoutDying += gameData.killsGained;
+
+        // Check for killing spree milestones
+        this.checkKillingSpree();
+
+        // Basic kill message
+        util.logMessage(
+            `Player got ${gameData.killsGained} new kill(s)! Total kills: ${gameData.currentKills} ${COMBAT_EMOJIS.KILL}`,
+            COMBAT_EMOJIS.KILL
+        );
+
+        // Check for kill streak (double kill, triple kill, etc.)
+        await this.checkMultiKill(gameData, currentGameState);
+    }
+
+    /**
+     * Check for killing spree milestones
+     */
+    checkKillingSpree() {
+        const killsWithoutDying = this.killStreakData.killsWithoutDying;
+        const spreeLevel = this.killStreakData.spreeLevel;
+
+        if (KILLING_SPREE_TYPES[killsWithoutDying] && spreeLevel < killsWithoutDying) {
+            const spreeMessage = KILLING_SPREE_TYPES[killsWithoutDying];
+            util.logMessage(spreeMessage, COMBAT_EMOJIS.SPREE);
+            this.killStreakData.spreeLevel = killsWithoutDying;
+            // You could play a sound here based on the spree level
+            // playSound(`${spreeMessage.toLowerCase().replace(/ /g, '_')}.mp3`);
+        }
+    }
+
+    /**
+     * Check for multi-kill streaks
+     */
+    async checkMultiKill(gameData, currentGameState) {
+        const timeSinceLastKill = gameData.currentGameTime - this.killStreakData.lastKillTime;
+
+        if (timeSinceLastKill <= KILL_STREAK_TIMEOUT) {
+            this.killStreakData.kills += gameData.killsGained;
+
+            // Determine streak type
+            if (this.killStreakData.kills >= 2 && KILL_STREAK_TYPES[this.killStreakData.kills]) {
+                this.killStreakData.streakType = KILL_STREAK_TYPES[this.killStreakData.kills];
+                util.logMessage(this.killStreakData.streakType, COMBAT_EMOJIS.SPREE);
+
+                // Save the replay if appropriate
+                try {
+                    await this.obsService.saveReplay({
+                        matchId: gameData.matchId,
+                        eventType: 'multikill',
+                        enemyName: 'multiple'
+                    });
+                } catch (error) {
+                    this.logger.error('Failed to save replay', {
+                        error: error.message
+                    });
                 }
-            } else {
-                this.killStreakData.kills = killsGained;
-                this.killStreakData.streakType = null;
             }
-            this.killStreakData.lastKillTime = currentGameTime;
+        } else {
+            this.killStreakData.kills = gameData.killsGained;
+            this.killStreakData.streakType = null;
         }
 
-        // Handle kill streak expiration
-        const timeSinceLastKill = currentGameTime - this.killStreakData.lastKillTime;
+        this.killStreakData.lastKillTime = gameData.currentGameTime;
+    }
+
+    /**
+     * Handle kill streak expiration
+     */
+    handleKillStreakExpiration(gameData) {
+        const timeSinceLastKill = gameData.currentGameTime - this.killStreakData.lastKillTime;
+
         if (this.killStreakData.kills > 0 && timeSinceLastKill > KILL_STREAK_TIMEOUT) {
             // Reset kill streak if timeout has passed
             this.killStreakData.kills = 0;
             this.killStreakData.streakType = null;
         }
-
-        // Update previous state
-        this.previousGameState = currentGameState;
     }
 }
+
 module.exports = KillStreak;
