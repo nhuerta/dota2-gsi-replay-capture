@@ -1,0 +1,46 @@
+{
+  "name": "dota2-gsi-replay-capture",
+  "version": "1.0.0",
+  "description": "A Node.js application that leverages Dota 2's Game State Integration to automatically capture and save replay clips for key game events through OBS Studio",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "dota2",
+    "gsi",
+    "game-state-integration",
+    "obs",
+    "replay",
+    "mirana",
+    "arrow",
+    "killstreak"
+  ],
+  "author": "nh",
+  "license": "MIT",
+  "dependencies": {
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "obs-websocket-js": "^5.0.6",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.7.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nhuerta/dota2-gsi-replay-capture.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nhuerta/dota2-gsi-replay-capture/issues"
+  },
+  "homepage": "https://github.com/nhuerta/dota2-gsi-replay-capture#readme",
+  "private": true
+}
