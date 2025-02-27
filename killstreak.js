@@ -80,6 +80,41 @@ class KillStreak {
         const currentGameTime = currentGameState.map.game_time * 1000;
         const currentAssists = currentGameState.player.assists || 0;
         const previousAssists = this.previousGameState.player.assists || 0;
+        const playerTeam = currentGameState.player?.team_name || '';
+        const currentRadiantScore = currentGameState.map?.radiant_score || 0;
+        const currentDireScore = currentGameState.map?.dire_score || 0;
+        const previousRadiantScore = this.previousGameState.map?.radiant_score || 0;
+        const previousDireScore = this.previousGameState.map?.dire_score || 0;
+        const playerGotKill = currentKills > previousKills;
+
+        //FIRSTBLOOD
+        // Case 1: First team kill detected (any team score went from 0 to more than 0)
+        const firstTeamKill = (previousRadiantScore === 0 && currentRadiantScore > 0) ||
+            (previousDireScore === 0 && currentDireScore > 0);
+
+        // Case 2: First global kill (sum of team scores went from 0 to 1)
+        const firstGlobalKill = previousRadiantScore + previousDireScore === 0 &&
+            currentRadiantScore + currentDireScore === 1;
+
+        if ((firstTeamKill || firstGlobalKill) && !this.killStreakData.firstBloodClaimed) {
+            this.killStreakData.firstBloodClaimed = true;
+
+            // Player got first blood
+            if (playerGotKill) {
+                util.logMessage(`YOU GOT FIRST BLOOD! ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
+            }
+
+            // Player's team got first blood
+            const playerOnRadiant = playerTeam.toLowerCase() === 'radiant';
+            const radiantGotKill = currentRadiantScore > previousRadiantScore;
+
+            if ((playerOnRadiant && radiantGotKill) || (!playerOnRadiant && !radiantGotKill)) {
+                util.logMessage(`YOUR TEAM GOT FIRST BLOOD! ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
+            } else {
+                util.logMessage(`ENEMY TEAM GOT FIRST BLOOD ${COMBAT_EMOJIS.DEATH}`, COMBAT_EMOJIS.DEATH);
+            }
+        }
+        //ENDFIRSTBLOOD
 
         // Check for player assists
         if (currentAssists > previousAssists) {
@@ -99,16 +134,8 @@ class KillStreak {
         }
 
         // Detect if a kill happened since the last update
-        if (currentKills > previousKills) {
+        if (playerGotKill) {
             const killsGained = currentKills - previousKills;
-
-            // Check for First Blood
-            if (!this.killStreakData.firstBloodClaimed && currentKills > 0) {
-                util.logMessage(`FIRST BLOOD ${COMBAT_EMOJIS.KILL}`, COMBAT_EMOJIS.KILL);
-                this.killStreakData.firstBloodClaimed = true;
-                // You could play a special sound here
-                // playSound('first_blood.mp3');
-            }
 
             // Increment kills without dying counter
             this.killStreakData.killsWithoutDying += killsGained;
