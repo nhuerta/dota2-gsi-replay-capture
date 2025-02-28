@@ -6,14 +6,13 @@
 function sanitizeHeroName(heroName) {
     if (!heroName) return '';
 
-    // Extract hero name if in npc_dota_hero_xxx format
-    let cleanName = heroName;
-    if (cleanName.startsWith('npc_dota_hero_')) {
-        cleanName = cleanName.replace('npc_dota_hero_', '');
+    if (heroName.startsWith('npc_dota_hero_')) {
+        const baseName = heroName.substring('npc_dota_hero_'.length);
+        return baseName.split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
     }
-
-    // Remove special characters but preserve hyphens
-    return cleanName.replace(/[^a-zA-Z0-9-]/g, '');
+    return heroName;
 }
 
 function logMessage(message, emoji = null) {
@@ -22,7 +21,15 @@ function logMessage(message, emoji = null) {
     console.log(`[${timestamp}] ${emojiPrefix}${message}`);
 }
 
+function getEnemiesFromMinimap(gameState) {
+    if (!gameState.minimap) return [];
+
+    return Object.values(gameState.minimap)
+        .filter(obj => obj.image === 'minimap_enemyicon');
+}
+
 module.exports = {
     sanitizeHeroName,
-    logMessage
+    logMessage,
+    getEnemiesFromMinimap
 };

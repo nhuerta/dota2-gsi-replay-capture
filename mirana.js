@@ -196,10 +196,7 @@ class ArrowHitDetector {
      * @returns {Array} Array of enemy heroes
      */
     getEnemiesFromMinimap(gameState) {
-        if (!gameState.minimap) return [];
-
-        return Object.values(gameState.minimap)
-            .filter(obj => obj.image === 'minimap_enemyicon');
+        return util.getEnemiesFromMinimap(gameState);
     }
 
     /**
@@ -230,7 +227,7 @@ class ArrowHitDetector {
     handleArrowCast(gameState, gameTime) {
         this.lastCastTime = gameTime;
         this.recordEnemyPositions(gameState, gameTime);
-        util.logMessage(`${HERO_EMOJIS.MIRANA} Sacred Arrow launched!`, HERO_EMOJIS.ARROW);
+        //util.logMessage(`${HERO_EMOJIS.MIRANA} Sacred Arrow launched!`, HERO_EMOJIS.ARROW);
     }
 
     /**
@@ -335,7 +332,7 @@ class ArrowHitDetector {
 
         util.logMessage(
             `${HERO_EMOJIS.MIRANA} Potential arrow hit detected. Enemy: \x1b[32m${
-                util.sanitizeHeroName(arrowData.enemyName).toUpperCase()
+                util.sanitizeHeroName(arrowData.enemyName)
             }\x1b[0m`,
             HERO_EMOJIS.ARROW
         );
