@@ -1,4 +1,4 @@
-const { SYSTEM_EMOJIS } = require('./emojis');
+const { SYSTEM_EMOJIS, COMBAT_EMOJIS } = require('./emojis');
 const util = require('./util');
 
 class Enemy {
@@ -155,7 +155,7 @@ class Enemy {
             });
 
             // If we found a good match (above threshold)
-            if (bestMatch && bestScore > 0.3) {
+            if (bestMatch && bestScore > 0.1) {
                 // Update our mappings
                 this.victimIdToHero[kill.victimId] = bestMatch.name;
                 this.heroToVictimId[bestMatch.name] = kill.victimId;
@@ -195,9 +195,9 @@ class Enemy {
                 const totalKills = this.getKillCountForVictim(kill.victimId);
                 message += ` - Total kills: ${totalKills}`;
 
-                util.logMessage(message, SYSTEM_EMOJIS.KILL);
+                util.logMessage(message, COMBAT_EMOJIS.KILL);
             } else {
-                util.logMessage(`Killed unknown enemy (Victim ID: ${kill.victimId})`, SYSTEM_EMOJIS.KILL);
+                util.logMessage(`Killed unknown enemy (Victim ID: ${kill.victimId})`, COMBAT_EMOJIS.KILL);
             }
         });
     }
