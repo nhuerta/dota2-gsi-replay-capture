@@ -155,7 +155,7 @@ class Enemy {
             });
 
             // If we found a good match (above threshold)
-            if (bestMatch && bestScore > 0.1) {
+            if (bestMatch && bestScore > 0.3) {
                 // Update our mappings
                 this.victimIdToHero[kill.victimId] = bestMatch.name;
                 this.heroToVictimId[bestMatch.name] = kill.victimId;
