@@ -260,6 +260,8 @@ All configuration options can be overridden using environment variables:
 ## Future Development
 
 - Support for additional heroes beyond Mirana
+- Voice control commands for saving a replay buffer and correcting confidence levels
+- Support for interfacing with Philips Hue Bridge for LED effects (in progress)
 - Expanded event detection (teamfights, Roshan kills, etc.)
 - User interface for configuration and highlight management
 - Performance metrics and analysis based on captured game data
