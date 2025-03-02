@@ -11,8 +11,135 @@ class Enemy {
         this.mappingConfidence = {};     // Confidence scores (0-1)
         this.killTimestamps = {};        // When kills were detected
         this.lastReportTime = 0;         // For periodic reporting
-        this.lockedMappings = new Set(); // NEW: Track locked high-confidence mappings
-        this.disappearedHeroes = {};     // NEW: Tracking enemies that remain off the minimap while supposedly dead
+        this.lockedMappings = new Set(); // Track locked high-confidence mappings
+        this.disappearedHeroes = {};     // Tracking enemies that remain off the minimap while supposedly dead
+    }
+
+    validateHeroMappings(gameState) {
+        const currentTime = gameState.map?.game_time || 0;
+
+        // Get all visible enemy heroes
+        const visibleHeroes = {};
+        for (const key in gameState.minimap) {
+            const entity = gameState.minimap[key];
+            if (this.isEnemy(entity)) {
+                visibleHeroes[entity.name] = {
+                    x: entity.xpos,
+                    y: entity.ypos
+                };
+            }
+        }
+
+        // Get player position
+        const playerPos = gameState.hero ? {
+            x: gameState.hero.xpos,
+            y: gameState.hero.ypos
+        } : null;
+
+        // Check all recent kills (within the last 10 seconds)
+        const recentKillThreshold = 10;
+        for (const victimId in this.killTimestamps) {
+            const killTime = this.killTimestamps[victimId];
+
+            // Only check recent kills
+            if (currentTime - killTime <= recentKillThreshold) {
+                const mappedHeroName = this.victimIdToHero[victimId];
+
+                // CASE 1: If the supposedly killed hero is visible, our mapping is wrong
+                if (mappedHeroName && visibleHeroes[mappedHeroName]) {
+                    this.correctInvalidMapping(victimId, mappedHeroName, visibleHeroes, playerPos);
+                }
+            }
+        }
+    }
+
+    correctInvalidMapping(victimId, incorrectHero, visibleHeroes, playerPos) {
+        util.logMessage(
+            `Correcting invalid mapping: ${this.formatHeroName(incorrectHero)} is still alive!`,
+            SYSTEM_EMOJIS.WARNING
+        );
+
+        // Remove the incorrect mapping
+        delete this.heroToVictimId[incorrectHero];
+
+        // Find heroes not currently visible
+        const invisibleHeroes = Object.keys(this.enemyHeroes).filter(
+            heroName => !visibleHeroes[heroName]
+        );
+
+        if (invisibleHeroes.length > 0) {
+            // If we have player position, prioritize by last known distance
+            let bestCandidate = invisibleHeroes[0];
+
+            if (playerPos && this.enemyHeroes[bestCandidate].lastPosition) {
+                let closestDistance = Number.MAX_SAFE_INTEGER;
+
+                for (const heroName of invisibleHeroes) {
+                    if (this.enemyHeroes[heroName].lastPosition) {
+                        const distance = this.calculateDistance(
+                            playerPos.x, playerPos.y,
+                            this.enemyHeroes[heroName].lastPosition.x,
+                            this.enemyHeroes[heroName].lastPosition.y
+                        );
+
+                        if (distance < closestDistance) {
+                            closestDistance = distance;
+                            bestCandidate = heroName;
+                        }
+                    }
+                }
+            }
+
+            // Assign to the best candidate with high confidence
+            this.victimIdToHero[victimId] = bestCandidate;
+            this.heroToVictimId[bestCandidate] = victimId;
+            this.mappingConfidence[victimId] = 0.8; // High confidence for proximity-based correction
+
+            util.logMessage(
+                `Reassigned kill: VictimID ${victimId} is ${this.formatHeroName(bestCandidate)} (80% confidence)`,
+                SYSTEM_EMOJIS.INFO
+            );
+
+            // Remove from locked mappings
+            this.lockedMappings.delete(victimId);
+        } else {
+            // If all heroes are visible, just remove the mapping
+            delete this.victimIdToHero[victimId];
+
+            util.logMessage(
+                `Removed invalid mapping for VictimID ${victimId}`,
+                SYSTEM_EMOJIS.INFO
+            );
+        }
+    }
+
+    trackVisibleEnemies(gameState) {
+        if (!gameState.minimap) return;
+
+        // Track all enemy heroes visible on minimap
+        for (const key in gameState.minimap) {
+            const entity = gameState.minimap[key];
+
+            if (this.isEnemy(entity)) {
+                const heroName = entity.name;
+
+                if (!this.enemyHeroes[heroName]) {
+                    this.enemyHeroes[heroName] = {
+                        id: key,
+                        name: heroName,
+                        displayName: this.formatHeroName(heroName)
+                    };
+
+                    util.logMessage(`Found enemy ${this.formatHeroName(heroName)}`, SYSTEM_EMOJIS.INFO);
+                }
+
+                // Always update position
+                this.enemyHeroes[heroName].lastPosition = {
+                    x: entity.xpos,
+                    y: entity.ypos
+                };
+            }
+        }
     }
 
     lockHighConfidenceMappings(victimId) {
@@ -24,46 +151,6 @@ class Enemy {
                 SYSTEM_EMOJIS.INFO
             );
         }
-    }
-
-    updateEnemies(gameState) {
-        // Update our catalog of known enemy heroes
-        this.trackVisibleEnemies(gameState);
-
-        // Detect new kills that occurred since last update
-        const newKills = this.detectNewKills(gameState);
-
-        // NEW: Immediately check for and correct invalid mappings
-        if (newKills.length > 0) {
-            this.invalidateIncorrectMappings(gameState);
-        }
-
-        // Identify which enemies disappeared from the minimap
-        const disappearedEnemies = this.detectDisappearedEnemies(gameState);
-
-        // Ensure every new victim ID has an initial mapping
-        this.ensureInitialMapping(newKills);
-
-        // Map disappeared enemies to victim IDs when both occur together
-        if (newKills.length > 0 && disappearedEnemies.length > 0) {
-            this.correlateKillsWithDisappearances(newKills, disappearedEnemies, gameState);
-        }
-
-        // NEW: Verify extended disappearances to confirm kills
-        this.verifyExtendedDisappearances(gameState);
-
-        // Log identified kills with appropriate confidence indicators
-        this.reportKills(newKills);
-
-        // Periodically report kill summary (every 60 game seconds)
-        const currentTime = gameState.map?.game_time || 0;
-        if (currentTime - this.lastReportTime >= 60) {
-            this.reportKillSummary();
-            this.lastReportTime = currentTime;
-        }
-
-        // Store current state for next comparison
-        this.updatePreviousState(gameState);
     }
 
     ensureInitialMapping(newKills) {
@@ -274,29 +361,6 @@ class Enemy {
         });
     }
 
-    trackVisibleEnemies(gameState) {
-        if (!gameState.minimap) return;
-
-        // Track all enemy heroes visible on minimap
-        for (const key in gameState.minimap) {
-            const entity = gameState.minimap[key];
-
-            if (this.isEnemy(entity)) {
-                const heroName = entity.name;
-
-                if (!this.enemyHeroes[heroName]) {
-                    this.enemyHeroes[heroName] = {
-                        id: key,
-                        name: heroName,
-                        displayName: this.formatHeroName(heroName)
-                    };
-
-                    util.logMessage(`Found enemy ${this.formatHeroName(heroName)}`, SYSTEM_EMOJIS.INFO);
-                }
-            }
-        }
-    }
-
     detectNewKills(gameState) {
         if (!gameState.player || !gameState.player.kill_list) return [];
 
@@ -451,71 +515,6 @@ class Enemy {
         }
     }
 
-    invalidateIncorrectMappings(gameState) {
-        // Check if we have any recent kills
-        const currentTime = gameState.map?.game_time || 0;
-        const recentKillThreshold = 3; // Look at kills in the last 3 seconds
-
-        // Get all visible enemy heroes
-        const visibleHeroes = new Set();
-        for (const key in gameState.minimap) {
-            const entity = gameState.minimap[key];
-            if (this.isEnemy(entity)) {
-                visibleHeroes.add(entity.name);
-            }
-        }
-
-        // Check recent kills
-        for (const victimId in this.killTimestamps) {
-            const killTime = this.killTimestamps[victimId];
-
-            // Only check recent kills
-            if (currentTime - killTime <= recentKillThreshold) {
-                const mappedHeroName = this.victimIdToHero[victimId];
-
-                // If the supposedly killed hero is visible, our mapping is wrong
-                if (mappedHeroName && visibleHeroes.has(mappedHeroName)) {
-                    util.logMessage(
-                        `Correcting invalid mapping: ${this.formatHeroName(mappedHeroName)} is still alive!`,
-                        SYSTEM_EMOJIS.WARNING
-                    );
-
-                    // Remove the incorrect mapping
-                    delete this.heroToVictimId[mappedHeroName];
-
-                    // Find likely candidates (heroes not visible right now)
-                    const possibleVictims = Object.keys(this.enemyHeroes).filter(
-                        heroName => !visibleHeroes.has(heroName)
-                    );
-
-                    if (possibleVictims.length > 0) {
-                        // Assign to a hero that's not currently visible
-                        const newHero = possibleVictims[0];
-                        this.victimIdToHero[victimId] = newHero;
-                        this.heroToVictimId[newHero] = victimId;
-                        this.mappingConfidence[victimId] = 0.7; // Higher confidence for this correction
-
-                        util.logMessage(
-                            `Reassigned kill: VictimID ${victimId} is likely ${this.formatHeroName(newHero)} (70% confidence)`,
-                            SYSTEM_EMOJIS.INFO
-                        );
-
-                        // Remove hero from locked mappings if it was locked
-                        this.lockedMappings.delete(victimId);
-                    } else {
-                        // In the unlikely case all heroes are visible, just mark as unknown
-                        delete this.victimIdToHero[victimId];
-
-                        util.logMessage(
-                            `Removed invalid mapping for VictimID ${victimId} - hero is still alive`,
-                            SYSTEM_EMOJIS.INFO
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     calculateDistance(x1, y1, x2, y2) {
         return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
     }
@@ -618,6 +617,44 @@ class Enemy {
 
     isEnemy(entity) {
         return entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_');
+    }
+
+    updateEnemies(gameState) {
+        // Update our catalog of known enemy heroes
+        this.trackVisibleEnemies(gameState);
+
+        // Detect new kills that occurred since last update
+        const newKills = this.detectNewKills(gameState);
+
+        // Run mapping validation on EVERY update, not just after kills
+        this.validateHeroMappings(gameState);
+
+        // Identify which enemies disappeared from the minimap
+        const disappearedEnemies = this.detectDisappearedEnemies(gameState);
+
+        // Ensure every new victim ID has an initial mapping
+        this.ensureInitialMapping(newKills);
+
+        // Map disappeared enemies to victim IDs when both occur together
+        if (newKills.length > 0 && disappearedEnemies.length > 0) {
+            this.correlateKillsWithDisappearances(newKills, disappearedEnemies, gameState);
+        }
+
+        // Verify extended disappearances to confirm kills
+        this.verifyExtendedDisappearances(gameState);
+
+        // Log identified kills with appropriate confidence indicators
+        this.reportKills(newKills);
+
+        // Periodically report kill summary (every 60 game seconds)
+        const currentTime = gameState.map?.game_time || 0;
+        if (currentTime - this.lastReportTime >= 60) {
+            this.reportKillSummary();
+            this.lastReportTime = currentTime;
+        }
+
+        // Store current state for next comparison
+        this.updatePreviousState(gameState);
     }
 }
 
