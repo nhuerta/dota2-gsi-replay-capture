@@ -11,6 +11,18 @@ class Enemy {
         this.mappingConfidence = {};     // Confidence scores (0-1)
         this.killTimestamps = {};        // When kills were detected
         this.lastReportTime = 0;         // For periodic reporting
+        this.lockedMappings = new Set()  // NEW: Track locked high-confidence mappings
+    }
+
+    lockHighConfidenceMappings(victimId) {
+        // If confidence reaches threshold, lock this mapping
+        if (this.mappingConfidence[victimId] >= 0.85) {
+            this.lockedMappings.add(victimId);
+            util.logMessage(
+                `Locked mapping: VictimID ${victimId} is ${this.formatHeroName(this.victimIdToHero[victimId])} (high confidence)`,
+                SYSTEM_EMOJIS.INFO
+            );
+        }
     }
 
     updateEnemies(gameState) {
@@ -123,15 +135,31 @@ class Enemy {
             const currentHeroName = this.victimIdToHero[kill.victimId];
             const currentConfidence = this.mappingConfidence[kill.victimId] || 0;
 
+            // NEW: Skip if this mapping is locked
+            if (this.lockedMappings.has(kill.victimId)) {
+                // Still update confidence for confirmation, but don't change mapping
+                if (bestMatch && bestMatch.name === currentHeroName) {
+                    this.mappingConfidence[kill.victimId] = Math.min(
+                        1.0,
+                        currentConfidence + (bestScore * 0.1)
+                    );
+                }
+                return; // Skip the rest of this iteration
+            }
+
             // Only consider better scores than our current confidence
             // (this is key - we should be able to improve beyond initial 10%)
             const minScoreThreshold = Math.max(0.2, currentConfidence - 0.1);
 
             // Find the disappeared enemy with timing closest to the kill
             disappearedEnemies.forEach(enemy => {
-                // Calculate time-based correlation score
-                const timeDiff = Math.abs(kill.timestamp - enemy.timestamp);
-                const timeScore = Math.max(0, 1 - (timeDiff / 2)); // 2 second window
+                // Consider asymmetric time windows
+                // Deaths typically happen slightly before kill notifications
+                const timeScore = Math.max(0, 1 - (
+                    enemy.timestamp < kill.timestamp ?
+                        (kill.timestamp - enemy.timestamp) / 1.5 : // Before kill notification
+                        (enemy.timestamp - kill.timestamp) / 0.5    // After kill notification
+                ));
 
                 // Calculate distance-based correlation score
                 let proximityScore = 0;
@@ -172,6 +200,8 @@ class Enemy {
                         `Confirmed: VictimID ${kill.victimId} is ${this.formatHeroName(bestMatch.name)} (${confidencePct}% confidence)`,
                         SYSTEM_EMOJIS.INFO
                     );
+                    // NEW: Check if we should lock this mapping
+                    this.lockHighConfidenceMappings(kill.victimId);
                 }
                 // This is a new hero assignment that's better than our current one
                 else {
@@ -179,6 +209,10 @@ class Enemy {
                     if (this.heroToVictimId[bestMatch.name]) {
                         // Only reassign if our new score is significantly better than existing
                         const otherVictimId = this.heroToVictimId[bestMatch.name];
+                        // NEW: Also skip if the hero's current mapping is locked
+                        if (this.lockedMappings.has(otherVictimId)) {
+                            return; // Skip reassignment
+                        }
                         const otherConfidence = this.mappingConfidence[otherVictimId] || 0;
 
                         if (bestScore > otherConfidence + 0.2) {
@@ -215,7 +249,8 @@ class Enemy {
                         this.victimIdToHero[kill.victimId] = bestMatch.name;
                         this.heroToVictimId[bestMatch.name] = kill.victimId;
                         this.mappingConfidence[kill.victimId] = bestScore;
-
+                        // NEW: Check if confidence is high enough to lock
+                        this.lockHighConfidenceMappings(kill.victimId);
                         const confidencePct = Math.round(bestScore * 100);
                         util.logMessage(
                             `Updated: VictimID ${kill.victimId} to ${this.formatHeroName(bestMatch.name)} (${confidencePct}% confidence)`,
