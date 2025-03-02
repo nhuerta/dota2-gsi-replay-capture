@@ -8,7 +8,6 @@ const OBSService = require('./obs-service');
 const Mirana = require('./mirana');
 const KillStreak = require('./killstreak');
 const GameStateLogger = require('./gamestate-logger');
-const Enemy = require('./enemy');
 
 // Initialize required directories and create logger
 function initializeApp() {
@@ -34,7 +33,6 @@ const obsService = new OBSService(logger, config.obs);
 // Create our trackers on startup
 const miranaTracker = new Mirana(logger, obsService);
 const killStreakTracker = new KillStreak(logger, obsService);
-const enemyTracker = new Enemy();
 
 // Start the express application
 const app = express();
@@ -48,7 +46,6 @@ app.post('/', async (req, res) => {
     gameStateLogger.logGameState(gameState);
     await killStreakTracker.processGameState(gameState)
     await miranaTracker.processGameState(gameState);
-    enemyTracker.updateEnemies(gameState);
     res.sendStatus(200);
 });
 
