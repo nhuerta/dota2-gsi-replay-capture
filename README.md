@@ -15,11 +15,6 @@ This application uses Dota 2's Game State Integration (GSI) API to process real-
     - First blood recognition (for player and team)
     - Hero-specific ability usage tracking (currently supports Mirana)
     - Sacred Arrow hit detection with intelligent enemy movement analysis
-- **Advanced enemy tracking system** that:
-    - Maps enemy heroes to victim IDs using probabilistic correlation
-    - Builds confidence scores for hero-victim mappings over time
-    - Validates mappings by monitoring minimap presence/absence
-    - Auto-corrects invalid mappings when inconsistencies are detected
 - **Automatic OBS integration** for replay capture and management:
     - Uses OBS WebSocket protocol for remote control
     - Automatically saves and organizes replay clips with descriptive filenames
@@ -122,9 +117,8 @@ This application uses Dota 2's Game State Integration (GSI) API to process real-
 The application consists of several specialized modules working together to process game state data:
 
 - **App (app.js)**: Express server that receives GSI updates and coordinates processing between all components
-- **Enemy Tracker (enemy.js)**: Maps enemy heroes to victim IDs using probabilistic techniques and confidence scoring
-- **Mirana Tracker (mirana.js)**: Detects Mirana ability usage and successful Sacred Arrow hits through movement analysis
 - **Kill Streak Tracker (killstreak.js)**: Monitors multi-kills, kill streaks, and first blood events
+- **Mirana Tracker (mirana.js)**: Detects Mirana ability usage and successful Sacred Arrow hits through movement analysis
 - **OBS Service (obs-service.js)**: Manages OBS WebSocket connection and handles replay saving with metadata
 - **Game State Logger (gamestate-logger.js)**: Records game state data for analysis with automatic file rotation
 - **Configuration (config/)**: Manages environment-specific configuration with flexible override system
@@ -138,7 +132,6 @@ dota2-gsi-replay-capture/
 ├── config/                # Configuration directory
 │   ├── default.js         # Default configuration values
 │   └── index.js           # Environment-specific configuration
-├── enemy.js               # Enemy tracking and victim mapping logic
 ├── killstreak.js          # Kill streak detection logic
 ├── logger.js              # Winston logger setup
 ├── mirana.js              # Mirana ability and arrow detection logic
@@ -153,21 +146,6 @@ dota2-gsi-replay-capture/
 ```
 
 ## How Tracking Works
-
-### Enemy Tracking System
-
-The enemy tracking system uses sophisticated probabilistic techniques to map enemy heroes to their victim IDs:
-
-1. **Time Correlation**: Associates heroes disappearing from the minimap with kill events
-2. **Proximity Analysis**: Uses player position to determine likely kill targets (closer enemies are more likely targets)
-3. **Extended Absence Verification**: Confirms kills when heroes remain missing from the minimap
-4. **Confidence Scoring**: Maintains confidence levels (0-1) for each hero-to-victim mapping
-5. **Mapping Validation**: Checks if supposedly killed heroes reappear unexpectedly
-6. **Auto-Correction**: Adjusts mappings when inconsistencies are detected and reassigns with appropriate confidence
-7. **Mapping Locking**: Prevents high-confidence mappings (>85%) from being changed without strong evidence
-8. **Kill Reporting**: Provides updates on kills with confidence indicators (probable/possible)
-
-The system continuously improves its mapping accuracy as the game progresses, producing increasingly reliable kill attribution.
 
 ### Ability Tracking
 
@@ -207,6 +185,10 @@ The kill streak system detects and classifies significant kill achievements:
     - Recognizes the first kill of the match
     - Differentiates between player achievement and team achievement
     - Provides appropriate notifications based on which team claimed first blood
+
+### Enemy Tracking System
+
+TODO
 
 ## Configuration
 
@@ -259,15 +241,16 @@ All configuration options can be overridden using environment variables:
 
 ## Future Development
 
-- Support for additional heroes beyond Mirana
-- Voice control commands for saving a replay buffer and correcting confidence levels
+- Voice control commands for saving a replay buffer on demand
 - Support for interfacing with Philips Hue Bridge for LED effects (in progress)
+- Enemy kill tracking (in progress)
 - Expanded event detection (teamfights, Roshan kills, etc.)
 - User interface for configuration and highlight management
 - Performance metrics and analysis based on captured game data
 - Integration with external APIs for more detailed game information
 - Advanced ML-based detection for complex game scenarios
 - Support for team-based events and coordination detection
+- Support for additional heroes beyond Mirana
 
 ## Contributing
 
@@ -288,7 +271,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Valve for Dota 2 and the Game State Integration API
 - OBS Studio for the WebSocket API
 - Contributors to the obs-websocket-js library
-- The Node.js community for the excellent libraries and tools
+- Node.js community
+- Claude 3.7 Sonnet 
 
 ---
 
