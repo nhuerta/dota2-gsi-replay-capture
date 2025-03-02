@@ -11,7 +11,8 @@ class Enemy {
         this.mappingConfidence = {};     // Confidence scores (0-1)
         this.killTimestamps = {};        // When kills were detected
         this.lastReportTime = 0;         // For periodic reporting
-        this.lockedMappings = new Set()  // NEW: Track locked high-confidence mappings
+        this.lockedMappings = new Set(); // NEW: Track locked high-confidence mappings
+        this.disappearedHeroes = {};     // NEW: Tracking enemies that remain off the minimap while supposedly dead
     }
 
     lockHighConfidenceMappings(victimId) {
@@ -42,6 +43,9 @@ class Enemy {
         if (newKills.length > 0 && disappearedEnemies.length > 0) {
             this.correlateKillsWithDisappearances(newKills, disappearedEnemies, gameState);
         }
+
+        // NEW: Verify extended disappearances to confirm kills
+        this.verifyExtendedDisappearances(gameState);
 
         // Log identified kills with appropriate confidence indicators
         this.reportKills(newKills);
@@ -135,16 +139,19 @@ class Enemy {
             const currentHeroName = this.victimIdToHero[kill.victimId];
             const currentConfidence = this.mappingConfidence[kill.victimId] || 0;
 
-            // NEW: Skip if this mapping is locked
+            // NEW Skip if this mapping is locked
             if (this.lockedMappings.has(kill.victimId)) {
-                // Still update confidence for confirmation, but don't change mapping
-                if (bestMatch && bestMatch.name === currentHeroName) {
-                    this.mappingConfidence[kill.victimId] = Math.min(
-                        1.0,
-                        currentConfidence + (bestScore * 0.1)
-                    );
+                // Still confirm the mapping to increase confidence
+                for (const enemy of disappearedEnemies) {
+                    if (enemy.name === currentHeroName) {
+                        const timeScore = Math.max(0, 1 - (Math.abs(kill.timestamp - enemy.timestamp) / 2));
+                        if (timeScore > 0.5) {
+                            this.mappingConfidence[kill.victimId] = Math.min(1.0, currentConfidence + 0.1);
+                        }
+                        break;
+                    }
                 }
-                return; // Skip the rest of this iteration
+                return; // Skip further processing for this kill
             }
 
             // Only consider better scores than our current confidence
@@ -323,7 +330,7 @@ class Enemy {
         // Create set of currently visible enemy heroes
         for (const key in gameState.minimap) {
             const entity = gameState.minimap[key];
-            if (this.isEnemy(entity)) {
+            if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
                 currentEnemiesSet.add(entity.name);
             }
         }
@@ -331,21 +338,112 @@ class Enemy {
         // Check which enemies were visible before but not now
         for (const key in this.previousMinimap) {
             const entity = this.previousMinimap[key];
-            if (this.isEnemy(entity)) {
+            if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
                 if (!currentEnemiesSet.has(entity.name)) {
-                    disappearedEnemies.push({
+                    // Add to disappeared list for immediate correlation
+                    const disappearData = {
                         name: entity.name,
                         timestamp: timestamp,
                         lastPosition: {
                             x: entity.xpos,
                             y: entity.ypos
                         }
-                    });
+                    };
+
+                    disappearedEnemies.push(disappearData);
+
+                    // NEW: Also add to tracking for extended verification
+                    this.disappearedHeroes[entity.name] = {
+                        timestamp: timestamp,
+                        position: {
+                            x: entity.xpos,
+                            y: entity.ypos
+                        }
+                    };
                 }
             }
         }
 
         return disappearedEnemies;
+    }
+
+    verifyExtendedDisappearances(gameState) {
+        const currentTime = gameState.map.game_time;
+        const currentlyVisibleHeroes = new Set();
+
+        // Identify currently visible heroes
+        for (const key in gameState.minimap) {
+            const entity = gameState.minimap[key];
+            if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
+                currentlyVisibleHeroes.add(entity.name);
+
+                // If a tracked hero reappears, remove from disappeared tracking
+                if (this.disappearedHeroes[entity.name]) {
+                    delete this.disappearedHeroes[entity.name];
+                }
+            }
+        }
+
+        // Check for heroes that have been missing for 5+ seconds
+        for (const [heroName, data] of Object.entries(this.disappearedHeroes)) {
+            // Skip if hero reappeared
+            if (currentlyVisibleHeroes.has(heroName)) {
+                continue;
+            }
+
+            // Check if hero has been missing for more than 5 seconds
+            if (currentTime - data.timestamp > 5) {
+                // Find any kill that happened around the time this hero disappeared
+                for (const victimId in this.victimIdToHero) {
+                    // Skip if this mapping is already locked
+                    if (this.lockedMappings.has(victimId)) {
+                        continue;
+                    }
+
+                    const killTime = this.killTimestamps[victimId];
+
+                    // If kill timestamp is within 3 seconds of disappearance
+                    if (killTime && Math.abs(killTime - data.timestamp) < 3) {
+                        const oldHeroName = this.victimIdToHero[victimId];
+                        const currentConfidence = this.mappingConfidence[victimId] || 0;
+
+                        // Update confidence with a substantial boost
+                        // Extended absence is strong evidence
+                        const newConfidence = Math.min(0.95, currentConfidence + 0.35);
+                        this.mappingConfidence[victimId] = newConfidence;
+
+                        // Update mapping if it doesn't match or has low confidence
+                        if (oldHeroName !== heroName && newConfidence > currentConfidence) {
+                            // Remove old hero mapping if it exists
+                            if (oldHeroName) {
+                                delete this.heroToVictimId[oldHeroName];
+                            }
+
+                            // Update mappings
+                            this.victimIdToHero[victimId] = heroName;
+                            this.heroToVictimId[heroName] = victimId;
+
+                            util.logMessage(
+                                `Extended absence confirms: VictimID ${victimId} is ${this.formatHeroName(heroName)} (${Math.round(newConfidence * 100)}% confidence)`,
+                                SYSTEM_EMOJIS.INFO
+                            );
+
+                            // Lock mapping if confidence is very high
+                            if (newConfidence >= 0.85) {
+                                this.lockedMappings.add(victimId);
+                                util.logMessage(
+                                    `Mapping locked: VictimID ${victimId} is confirmed as ${this.formatHeroName(heroName)}`,
+                                    SYSTEM_EMOJIS.INFO
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Remove from tracking after processing
+                delete this.disappearedHeroes[heroName];
+            }
+        }
     }
 
     calculateDistance(x1, y1, x2, y2) {
