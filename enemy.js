@@ -23,9 +23,12 @@ class Enemy {
         // Identify which enemies disappeared from the minimap
         const disappearedEnemies = this.detectDisappearedEnemies(gameState);
 
+        // Ensure every new victim ID has an initial mapping
+        this.ensureInitialMapping(newKills);
+
         // Map disappeared enemies to victim IDs when both occur together
         if (newKills.length > 0 && disappearedEnemies.length > 0) {
-            this.correlateKillsWithDisappearances(newKills, disappearedEnemies);
+            this.correlateKillsWithDisappearances(newKills, disappearedEnemies, gameState);
         }
 
         // Log identified kills with appropriate confidence indicators
@@ -42,6 +45,188 @@ class Enemy {
         this.updatePreviousState(gameState);
     }
 
+    ensureInitialMapping(newKills) {
+        // Skip if we haven't found any enemies yet
+        if (Object.keys(this.enemyHeroes).length === 0) return;
+
+        // Process each new kill
+        newKills.forEach(kill => {
+            // Only handle unmapped victim IDs
+            if (this.victimIdToHero[kill.victimId]) return;
+
+            // Find unmapped enemy heroes
+            const mappedHeroes = new Set(Object.values(this.victimIdToHero));
+            const unmappedHeroes = Object.keys(this.enemyHeroes).filter(
+                heroName => !mappedHeroes.has(heroName)
+            );
+
+            let assignedHero = null;
+
+            if (unmappedHeroes.length > 0) {
+                // Assign to a random unmapped hero
+                const randomIndex = Math.floor(Math.random() * unmappedHeroes.length);
+                assignedHero = unmappedHeroes[randomIndex];
+            } else {
+                // All heroes are mapped, find one with lowest confidence
+                let lowestConfidence = 1.0;
+                let lowestConfidenceHero = null;
+
+                Object.entries(this.heroToVictimId).forEach(([heroName, vid]) => {
+                    const confidence = this.mappingConfidence[vid] || 0;
+                    if (confidence < lowestConfidence) {
+                        lowestConfidence = confidence;
+                        lowestConfidenceHero = heroName;
+                    }
+                });
+
+                // Reassign the hero with lowest confidence mapping
+                if (lowestConfidenceHero) {
+                    // Get the current victim ID for this hero
+                    const currentVictimId = this.heroToVictimId[lowestConfidenceHero];
+
+                    // Remove the old mapping
+                    delete this.victimIdToHero[currentVictimId];
+
+                    assignedHero = lowestConfidenceHero;
+                } else {
+                    // Fallback - use the first hero in our list
+                    assignedHero = Object.keys(this.enemyHeroes)[0];
+                }
+            }
+
+            // Create the new mapping with low confidence
+            if (assignedHero) {
+                this.victimIdToHero[kill.victimId] = assignedHero;
+                this.heroToVictimId[assignedHero] = kill.victimId;
+                this.mappingConfidence[kill.victimId] = 0.1; // Low initial confidence
+
+                util.logMessage(
+                    `Initial mapping: VictimID ${kill.victimId} to ${this.formatHeroName(assignedHero)} (10% confidence)`,
+                    SYSTEM_EMOJIS.INFO
+                );
+            }
+        });
+    }
+
+    correlateKillsWithDisappearances(newKills, disappearedEnemies, gameState) {
+        // Get player position for proximity check
+        const playerXPos = gameState.hero?.xpos;
+        const playerYPos = gameState.hero?.ypos;
+        const canCheckProximity = playerXPos !== undefined && playerYPos !== undefined;
+
+        // Process ALL kills, not just unmapped ones
+        newKills.forEach(kill => {
+            let bestMatch = null;
+            let bestScore = 0;
+
+            // Get current mapping info if it exists
+            const currentHeroName = this.victimIdToHero[kill.victimId];
+            const currentConfidence = this.mappingConfidence[kill.victimId] || 0;
+
+            // Only consider better scores than our current confidence
+            // (this is key - we should be able to improve beyond initial 10%)
+            const minScoreThreshold = Math.max(0.2, currentConfidence - 0.1);
+
+            // Find the disappeared enemy with timing closest to the kill
+            disappearedEnemies.forEach(enemy => {
+                // Calculate time-based correlation score
+                const timeDiff = Math.abs(kill.timestamp - enemy.timestamp);
+                const timeScore = Math.max(0, 1 - (timeDiff / 2)); // 2 second window
+
+                // Calculate distance-based correlation score
+                let proximityScore = 0;
+                if (canCheckProximity && enemy.lastPosition) {
+                    const distance = this.calculateDistance(
+                        playerXPos, playerYPos,
+                        enemy.lastPosition.x, enemy.lastPosition.y
+                    );
+
+                    // Higher score for closer enemies
+                    proximityScore = Math.max(0, 1 - (distance / 1500));
+                }
+
+                // Combined score - weight time and proximity equally
+                const combinedScore = canCheckProximity ?
+                    (timeScore * 0.5) + (proximityScore * 0.5) :
+                    timeScore;
+
+                // Check if this is a better match
+                if (combinedScore > bestScore && combinedScore > minScoreThreshold) {
+                    bestScore = combinedScore;
+                    bestMatch = enemy;
+                }
+            });
+
+            // If we found a better match than our current confidence
+            if (bestMatch) {
+                // If this is a confirmation of existing mapping
+                if (bestMatch.name === currentHeroName) {
+                    // Increase confidence but cap at 1.0
+                    this.mappingConfidence[kill.victimId] = Math.min(
+                        1.0,
+                        currentConfidence + (bestScore * 0.2)
+                    );
+
+                    const confidencePct = Math.round(this.mappingConfidence[kill.victimId] * 100);
+                    util.logMessage(
+                        `Confirmed: VictimID ${kill.victimId} is ${this.formatHeroName(bestMatch.name)} (${confidencePct}% confidence)`,
+                        SYSTEM_EMOJIS.INFO
+                    );
+                }
+                // This is a new hero assignment that's better than our current one
+                else {
+                    // If this hero is already mapped to a different victim
+                    if (this.heroToVictimId[bestMatch.name]) {
+                        // Only reassign if our new score is significantly better than existing
+                        const otherVictimId = this.heroToVictimId[bestMatch.name];
+                        const otherConfidence = this.mappingConfidence[otherVictimId] || 0;
+
+                        if (bestScore > otherConfidence + 0.2) {
+                            // Remove the old mapping
+                            delete this.victimIdToHero[otherVictimId];
+
+                            // Update with new mapping
+                            this.victimIdToHero[kill.victimId] = bestMatch.name;
+                            this.heroToVictimId[bestMatch.name] = kill.victimId;
+                            this.mappingConfidence[kill.victimId] = bestScore;
+
+                            // Also update mapping for the hero we're replacing
+                            if (currentHeroName) {
+                                this.victimIdToHero[otherVictimId] = currentHeroName;
+                                this.heroToVictimId[currentHeroName] = otherVictimId;
+                                this.mappingConfidence[otherVictimId] = Math.min(currentConfidence, 0.5);
+                            }
+
+                            const confidencePct = Math.round(bestScore * 100);
+                            util.logMessage(
+                                `Reassigned: VictimID ${kill.victimId} to ${this.formatHeroName(bestMatch.name)} (${confidencePct}% confidence)`,
+                                SYSTEM_EMOJIS.INFO
+                            );
+                        }
+                    }
+                    // Simple replacement - no conflict with other mappings
+                    else {
+                        // Remove current hero's mapping if it exists
+                        if (currentHeroName) {
+                            delete this.heroToVictimId[currentHeroName];
+                        }
+
+                        // Create new mapping
+                        this.victimIdToHero[kill.victimId] = bestMatch.name;
+                        this.heroToVictimId[bestMatch.name] = kill.victimId;
+                        this.mappingConfidence[kill.victimId] = bestScore;
+
+                        const confidencePct = Math.round(bestScore * 100);
+                        util.logMessage(
+                            `Updated: VictimID ${kill.victimId} to ${this.formatHeroName(bestMatch.name)} (${confidencePct}% confidence)`,
+                            SYSTEM_EMOJIS.INFO
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     trackVisibleEnemies(gameState) {
         if (!gameState.minimap) return;
 
@@ -49,7 +234,7 @@ class Enemy {
         for (const key in gameState.minimap) {
             const entity = gameState.minimap[key];
 
-            if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
+            if (this.isEnemy(entity)) {
                 const heroName = entity.name;
 
                 if (!this.enemyHeroes[heroName]) {
@@ -103,7 +288,7 @@ class Enemy {
         // Create set of currently visible enemy heroes
         for (const key in gameState.minimap) {
             const entity = gameState.minimap[key];
-            if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
+            if (this.isEnemy(entity)) {
                 currentEnemiesSet.add(entity.name);
             }
         }
@@ -111,11 +296,15 @@ class Enemy {
         // Check which enemies were visible before but not now
         for (const key in this.previousMinimap) {
             const entity = this.previousMinimap[key];
-            if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
+            if (this.isEnemy(entity)) {
                 if (!currentEnemiesSet.has(entity.name)) {
                     disappearedEnemies.push({
                         name: entity.name,
-                        timestamp: timestamp
+                        timestamp: timestamp,
+                        lastPosition: {
+                            x: entity.xpos,
+                            y: entity.ypos
+                        }
                     });
                 }
             }
@@ -124,56 +313,8 @@ class Enemy {
         return disappearedEnemies;
     }
 
-    correlateKillsWithDisappearances(newKills, disappearedEnemies) {
-        // For each kill, find the most likely disappeared enemy
-        newKills.forEach(kill => {
-            // Skip if we already have high confidence in this mapping
-            if (this.mappingConfidence[kill.victimId] >= 0.9) return;
-
-            let bestMatch = null;
-            let bestScore = 0;
-
-            // Find the disappeared enemy with timing closest to the kill
-            disappearedEnemies.forEach(enemy => {
-                // Skip if this hero is already mapped to another victim with high confidence
-                const existingVictimId = this.heroToVictimId[enemy.name];
-                if (existingVictimId !== undefined &&
-                    existingVictimId !== kill.victimId &&
-                    this.mappingConfidence[existingVictimId] >= 0.8) {
-                    return;
-                }
-
-                // Calculate correlation score - higher is better match
-                // Perfect timing = 1.0 score, degrades with time difference
-                const timeDiff = Math.abs(kill.timestamp - enemy.timestamp);
-                const timeScore = Math.max(0, 1 - (timeDiff / 2)); // 2 second window
-
-                if (timeScore > bestScore) {
-                    bestScore = timeScore;
-                    bestMatch = enemy;
-                }
-            });
-
-            // If we found a good match (above threshold)
-            if (bestMatch && bestScore > 0.3) {
-                // Update our mappings
-                this.victimIdToHero[kill.victimId] = bestMatch.name;
-                this.heroToVictimId[bestMatch.name] = kill.victimId;
-
-                // Update confidence - increase with each correlation
-                const oldConfidence = this.mappingConfidence[kill.victimId] || 0;
-                this.mappingConfidence[kill.victimId] = Math.min(1, oldConfidence + (bestScore * 0.4));
-
-                const confidencePct = Math.round(this.mappingConfidence[kill.victimId] * 100);
-                util.logMessage(
-                    `Mapped VictimID ${kill.victimId} to ${this.formatHeroName(bestMatch.name)} (${confidencePct}% confidence)`,
-                    SYSTEM_EMOJIS.INFO
-                );
-
-                // Remove this enemy from disappeared list to avoid double-matching
-                disappearedEnemies = disappearedEnemies.filter(e => e.name !== bestMatch.name);
-            }
-        });
+    calculateDistance(x1, y1, x2, y2) {
+        return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
     }
 
     reportKills(newKills) {
@@ -253,7 +394,7 @@ class Enemy {
             this.previousMinimap = {};
             for (const key in gameState.minimap) {
                 const entity = gameState.minimap[key];
-                if (entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_')) {
+                if (this.isEnemy(entity)) {
                     this.previousMinimap[key] = {...entity};
                 }
             }
@@ -270,6 +411,10 @@ class Enemy {
                 .join(' ');
         }
         return heroName;
+    }
+
+    isEnemy(entity) {
+        return entity.image === 'minimap_enemyicon' && entity.name && entity.name.startsWith('npc_dota_hero_');
     }
 }
 
