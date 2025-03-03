@@ -16,12 +16,6 @@ class Enemy {
         }
     }
 
-    formatHeroName(heroName) {
-        if (!heroName || !heroName.startsWith('npc_dota_hero_')) return heroName || "Unknown";
-        const baseName = heroName.substring('npc_dota_hero_'.length);
-        return baseName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-    }
-
     trackEnemies(gameState) {
         if (!gameState.minimap) return;
 
@@ -32,7 +26,7 @@ class Enemy {
                 entity.name.startsWith('npc_dota_hero_')) {
                 const heroName = entity.name;
                 if (!this.enemyHeroes[heroName]) {
-                    const displayName = this.formatHeroName(heroName);
+                    const displayName = util.sanitizeHeroName(heroName);
                     this.enemyHeroes[heroName] = {
                         name: heroName,
                         displayName: displayName
